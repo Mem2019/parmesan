@@ -144,21 +144,81 @@ IDAssigner::CmpIdType IDAssigner::getAngoraCmpIdForBB(BasicBlock *BB) {
     return result;
 }
 
+static void getDebugLoc(const Instruction *I, std::string &Filename,
+                        unsigned &Line) {
+#ifdef LLVM_OLD_DEBUG_API
+  DebugLoc Loc = I->getDebugLoc();
+  if (!Loc.isUnknown()) {
+    DILocation cDILoc(Loc.getAsMDNode(M.getContext()));
+    DILocation oDILoc = cDILoc.getOrigLocation();
+
+    Line = oDILoc.getLineNumber();
+    Filename = oDILoc.getFilename().str();
+
+    if (filename.empty()) {
+      Line = cDILoc.getLineNumber();
+      Filename = cDILoc.getFilename().str();
+    }
+  }
+#else
+  if (DILocation *Loc = I->getDebugLoc()) {
+    Line = Loc->getLine();
+    Filename = Loc->getFilename().str();
+
+    if (Filename.empty()) {
+      DILocation *oDILoc = Loc->getInlinedAt();
+      if (oDILoc) {
+        Line = oDILoc->getLine();
+        Filename = oDILoc->getFilename().str();
+      }
+    }
+  }
+#endif /* LLVM_OLD_DEBUG_API */
+}
+
+static std::string getBasicBlockName(BasicBlock& BB) {
+  std::string bb_name = "<empty>";
+  for (auto &I : BB) {
+    std::string filename;
+    unsigned line = 0;
+    getDebugLoc(&I, filename, line);
+
+    if (filename.empty() || line == 0)
+      continue;
+    std::size_t found = filename.find_last_of("/\\");
+    if (found != std::string::npos)
+      filename = filename.substr(found + 1);
+
+    bb_name = filename + ":" + std::to_string(line);
+    break;
+  }
+  return bb_name;
+}
+
 bool IDAssigner::runOnModule(Module &M) {
   IdentifierGenerator = make_unique<IDGenerator>();
 
+  std::ofstream outstream("mapping.txt");
 
   std::set<IDAssigner::IdentifierType> cmpBbSet;
   for (auto &F : M) {
     IdMap[&F] = IdentifierGenerator->getUniqueIdentifier();
+    std::string fn = F.getName().str();
+    outstream << fn << ',' << IdMap[&F] << std::endl;
+    size_t idx = 0;
     for (Value &Arg : F.args()) {
       IdMap[&Arg] = IdentifierGenerator->getUniqueIdentifier();
+      outstream << fn << '|' << idx++ << ',' << IdMap[&Arg] << std::endl;
     }
 
     for (auto &BB : F) {
       IdMap[&BB] = IdentifierGenerator->getUniqueIdentifier();
+      std::string bbn = getBasicBlockName(BB);
+      outstream << bbn << ',' << IdMap[&BB] << std::endl;
+      size_t idx = 0;
       for (auto &I : BB) {
         IdMap[&I] = IdentifierGenerator->getUniqueIdentifier();
+        outstream << bbn << '|' << idx++ << ',' << IdMap[&I] << std::endl;
       }
     }
 
